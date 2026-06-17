@@ -158,13 +158,32 @@ Key observations from the EDA:
 - *Senior citizens* churn at ~42% versus ~24% for non-seniors.
 
 #figure(
-  image("figures/fig_02_eda_services.png", width: 95%),
-  caption: [Churn rates by add-on service subscription status.],
+  image("figures/fig_02_eda_services.png", width: 100%),
+  caption: [Churn rates by add-on service subscription status, shown as
+  three separate groups. *Red* (No): customer has internet but did not
+  subscribe to this add-on --- highest churn (~34--42%). *Blue* (Yes):
+  customer subscribed to the add-on --- lower churn (~15--30%). *Green*
+  (No internet service): customer has no internet at all --- lowest churn
+  (7.4% for all six services, identical because it is the same 1,520
+  customers in every panel).],
 )
 
-Customers without online security, tech support, or online backup churn at
-2--3× the rate of subscribers, suggesting these services increase perceived
-value and switching cost.
+The plot reveals:
+
+- *No internet service* customers (green) churn at only 7.4% --- the same
+  value across all six add-ons because it is exactly the same 1,520
+  customers in every column. They are not a "non-subscriber" in the usual
+  sense; they simply have no internet product at all.
+- *"No" subscribers* (red) --- customers who have internet but skipped the
+  add-on --- churn at 34--42%, the highest risk group.
+- *"Yes" subscribers* (blue) churn at 15--30%, roughly half the rate of
+  the "No" group. Security and support add-ons show the largest gap
+  (OnlineSecurity: 41.8% vs 14.6%; TechSupport: 41.6% vs 15.2%),
+  while streaming services show a smaller gap (both groups ~30--34%).
+
+This also explains the identical bars in the correlation chart: all six
+`_No internet service` dummies are the same 1,520 customers, so they
+produce the same r = −0.2276 with Churn.
 
 == Correlation Analysis
 
@@ -196,7 +215,58 @@ Key quantitative take-aways from the correlation analysis:
   are positively associated with churn.
 - The six internet add-on services (Online Security, Tech Support, etc.)
   are all negatively correlated with `Churn` --- consistent with the EDA
-  observation that these services halve the churn rate.
+  observation that these services roughly halve the churn rate.
+
+=== Why six features share the same correlation value
+
+In the right panel, the following seven entries all show *r = −0.2276*:
+
+#figure(
+  table(
+    columns: (3fr, 1fr),
+    fill: (_, y) => if y == 0 { luma(220) }
+                    else if calc.odd(y) { luma(247) }
+                    else { white },
+    table.header([*Feature*], [*r with Churn*]),
+    [`InternetService_No`],                    [−0.2276],
+    [`OnlineSecurity_No internet service`],    [−0.2276],
+    [`OnlineBackup_No internet service`],      [−0.2276],
+    [`DeviceProtection_No internet service`],  [−0.2276],
+    [`TechSupport_No internet service`],       [−0.2276],
+    [`StreamingTV_No internet service`],       [−0.2276],
+    [`StreamingMovies_No internet service`],   [−0.2276],
+  ),
+  caption: [Seven features with identical point-biserial correlation with Churn --- all encode the same binary fact.],
+  kind: table,
+)
+
+*Why are they identical?* The six add-on columns (OnlineSecurity, TechSupport,
+OnlineBackup, DeviceProtection, StreamingTV, StreamingMovies) each store the
+string `"No internet service"` for every customer whose `InternetService`
+is `"No"` — the dataset's way of marking that the add-on is inapplicable.
+When `pd.get_dummies` one-hot encodes each column, it creates a separate
+`_No internet service` dummy for each, but all six dummies equal 1 for
+*exactly the same 1,526 customers* (those with no internet service).
+They are *perfectly collinear* with each other and with `InternetService_No`.
+All seven variables express a single binary fact: *this customer has no
+internet service.*
+
+*Effect in the models:*
+
+- *Lasso (RQ1):* cannot distinguish the seven collinear variables, so it
+  distributes the coefficient equally across all of them (each gets −0.094;
+  combined effect = −0.659). This is expected L1 behaviour under perfect
+  collinearity.
+- *Logistic Regression:* absorbs the redundancy into correlated standard
+  errors, but predicted probabilities remain correct.
+- *Random Forest:* unaffected --- tree splits select one feature at a time
+  from a random subset, so any one of the seven carries the full signal.
+
+*Practical conclusion:* `InternetService_No` alone carries all of this
+information. The six `_No internet service` dummies add zero independent
+signal. The true underlying association is straightforward: customers with
+no internet service churn at ~7%, compared to ~42% for fiber optic customers
+--- a signal driven entirely by `InternetService_No`.
 
 These associations motivate the feature set and model interpretation in RQ1.
 
