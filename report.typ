@@ -33,7 +33,7 @@
   #text(size: 14pt)[Applied Statistics --- A.Y. 2025/2026]
 
   #v(0.6em)
-  #text(size: 12pt, style: "italic")[IBM Watson Telco Customer Churn Dataset]
+  #text(size: 12pt, style: "italic")[Ninja Six]
 
   #v(0.6em)
   #text(size: 11pt)[June 2026]
@@ -251,22 +251,26 @@ They are *perfectly collinear* with each other and with `InternetService_No`.
 All seven variables express a single binary fact: *this customer has no
 internet service.*
 
-*Effect in the models:*
+*Why this is a modelling problem --- not just a curiosity:*
 
-- *Lasso (RQ1):* cannot distinguish the seven collinear variables, so it
-  distributes the coefficient equally across all of them (each gets −0.094;
-  combined effect = −0.659). This is expected L1 behaviour under perfect
-  collinearity.
-- *Logistic Regression:* absorbs the redundancy into correlated standard
-  errors, but predicted probabilities remain correct.
-- *Random Forest:* unaffected --- tree splits select one feature at a time
-  from a random subset, so any one of the seven carries the full signal.
+Lasso's "select one, zero the rest" property holds only when features are
+_imperfectly_ correlated. Under perfect collinearity (|r| = 1.000) the L1
+objective has infinitely many minimisers; the solver converges to the
+symmetric equal-split solution (all seven features get −0.094 each), which
+is Ridge-like behaviour --- not feature selection. The estimated effect of
+`InternetService_No` would appear 6× smaller than it truly is, diluted
+across seven identical columns.
 
-*Practical conclusion:* `InternetService_No` alone carries all of this
-information. The six `_No internet service` dummies add zero independent
-signal. The true underlying association is straightforward: customers with
-no internet service churn at ~7%, compared to ~42% for fiber optic customers
---- a signal driven entirely by `InternetService_No`.
+A second collinearity exists between `PhoneService_Yes` and
+`MultipleLines_No phone service` (|r| = 1.000 verified). Every customer
+without phone service has both simultaneously.
+
+*Fix applied before RQ1 modelling:* The six add-on columns are recoded
+(`'No internet service'` → `'No'`), making them binary and removing the
+six redundant dummies. `PhoneService` is dropped since `MultipleLines`
+already encodes three levels (no phone / single line / multiple lines). The
+design matrix shrinks from 29 to *22 clean features* with zero
+perfect-collinearity pairs remaining.
 
 These associations motivate the feature set and model interpretation in RQ1.
 
@@ -293,6 +297,15 @@ the reverse. This prevents data leakage that would artificially inflate
 held-out performance estimates.
 
 == Preprocessing
+
+*Collinearity fix (applied before the pipeline):* A structural audit of
+the raw one-hot encoding reveals two groups of perfectly collinear features
+(|r| = 1.000). (1) Six add-on service columns each store `'No internet
+service'` for the same 1,520 customers, producing six dummies identical to
+`InternetService_No`; recoded to binary Yes/No before encoding. (2)
+`PhoneService_Yes` = 1 − `MultipleLines_No phone service` exactly;
+`PhoneService` dropped since `MultipleLines` encodes all three levels.
+Result: *22 clean features*, zero perfect-collinearity pairs.
 
 Numerical predictors (`tenure`, `MonthlyCharges`) are standardised; all
 categorical predictors are one-hot encoded with `drop='first'`. Everything
@@ -324,7 +337,7 @@ AUROC = 0.833*.
 #figure(
   image("figures/fig_03_lr_cm_roc.png", width: 100%),
   caption: [Logistic Regression: confusion matrix (left) and ROC curve
-  (right). Balanced weights prioritise recall for churners (0.78) at
+  (right). Balanced weights prioritise recall for churners (0.79) at
   the cost of precision (0.49).],
 )
 
@@ -340,28 +353,32 @@ AUROC = 0.833*.
     fill: (_, y) => if y == 0 { luma(220) }
                     else if calc.odd(y) { luma(247) }
                     else { white },
-    table.header([*Feature*], [*Direction*], [*Interpretation*]),
-    [`Contract_Two year`],              [↓↓ (OR ≪ 1)], [Strongest churn deterrent],
-    [`Contract_One year`],              [↓],            [Also substantially reduces churn odds],
-    [`InternetService_Fiber optic`],    [↑↑],           [Fiber customers have much higher churn odds vs DSL],
-    [`tenure`],                         [↓↓],           [More tenure → lower churn odds],
-    [`OnlineSecurity_Yes`],             [↓],            [Security add-on reduces churn odds],
-    [`PaymentMethod_Electronic check`], [↑],            [Associated with higher churn],
-    [`SeniorCitizen_1`],                [↑],            [Senior citizens have elevated churn odds],
+    table.header([*Feature*], [*OR*], [*Direction*], [*Interpretation*]),
+    [`Contract_Two year`],              [0.238], [↓↓ (OR ≪ 1)], [Strongest single churn deterrent],
+    [`Contract_One year`],              [0.456], [↓],            [Also substantially reduces churn odds],
+    [`InternetService_No`],             [0.378], [↓↓],           [No-internet customers churn far less (7% vs 42% fiber); _was distorted to 0.856 before collinearity fix_],
+    [`tenure`],                         [0.468], [↓↓],           [More tenure → lower churn odds],
+    [`OnlineSecurity_Yes`],             [0.707], [↓],            [Security add-on reduces churn odds],
+    [`TechSupport_Yes`],                [0.740], [↓],            [Support add-on reduces churn odds],
+    [`InternetService_Fiber optic`],    [2.908], [↑↑],           [Fiber customers have ~3× higher churn odds vs DSL baseline],
+    [`PaymentMethod_Electronic check`], [1.512], [↑],            [Non-automatic payment → higher churn],
+    [`MultipleLines_No phone service`], [1.394], [↑],            [No phone bundle → 39% higher churn odds vs single-line],
+    [`SeniorCitizen_1`],                [1.225], [↑],            [Senior citizens have elevated churn odds],
   ),
-  caption: [Key logistic regression odds ratios and their directions.],
+  caption: [Logistic regression odds ratios. OR \< 1 = churn deterrent; OR \> 1 = churn risk. `InternetService_No` OR was severely underestimated (0.856) before the collinearity fix; corrected value is 0.378.],
   kind: table,
 )
 
 == Lasso (L1) Feature Selection
 
-*Why Lasso?* The logistic regression baseline retains all 29 encoded
-features. Some are redundant: the seven "No internet service" dummies are
-perfectly collinear with `InternetService_No` (any customer without internet
-has all seven simultaneously). Lasso adds an L1 penalty proportional to the
-sum of absolute coefficients, which shrinks uninformative features _exactly
-to zero_. This performs automatic feature selection while preserving
-predictive performance. The regularisation strength is controlled by $C$
+*Why Lasso?* After the collinearity pre-processing step the design matrix
+contains 22 features with no perfect collinearity. Lasso adds an L1 penalty
+proportional to the sum of absolute coefficients, which shrinks genuinely
+uninformative features _exactly to zero_, performing automatic feature
+selection while preserving predictive performance. (Under perfect collinearity
+Lasso's selection property breaks down --- the solver distributes the
+coefficient equally, mimicking Ridge. The fix applied before this stage
+restores the guarantee.) The regularisation strength is controlled by $C$
 (smaller $C$ = stronger penalty); we select the $C$ that maximises held-out
 AUROC via 5-fold stratified CV.
 
@@ -375,7 +392,7 @@ AUROC = 0.835*.
   plateaus above C ≈ 0.2.],
 )
 
-Lasso *retains 25 features* and *zeroes out 4*:
+Lasso *retains 18 features* and *zeroes out 4*:
 
 #figure(
   table(
@@ -403,13 +420,16 @@ Top retained features by absolute coefficient:
                     else { white },
     table.header([*Feature*], [*Lasso coef.*], [*Interpretation*]),
     [`Contract_Two year`],                   [−1.380], [Strongest churn reducer],
-    [`InternetService_Fiber optic`],          [+0.776], [Highest positive risk factor],
+    [`InternetService_Fiber optic`],         [+0.775], [Highest positive risk factor],
     [`tenure`],                              [−0.765], [Longer tenure → lower churn],
     [`Contract_One year`],                   [−0.750], [Second-strongest protective contract],
-    [`OnlineSecurity_Yes`],                  [−0.382], [Value-added services reduce churn],
-    [`PaymentMethod_Electronic check`],       [+0.358], [Higher-risk payment method],
+    [`InternetService_No`],                  [−0.658], [No-internet customers churn far less; correctly isolated after collinearity fix],
+    [`MultipleLines_No phone service`],      [+0.492], [No phone bundle → more likely to churn; isolated after dropping redundant PhoneService],
+    [`OnlineSecurity_Yes`],                  [−0.383], [Value-added services reduce churn],
+    [`PaymentMethod_Electronic check`],      [+0.358], [Higher-risk payment method],
+    [`TechSupport_Yes`],                     [−0.332], [Value-added services reduce churn],
   ),
-  caption: [Top Lasso-retained features (standardised predictors).],
+  caption: [Top Lasso-retained features (standardised predictors). 18 of 22 features retained; 4 zeroed.],
   kind: table,
 )
 
@@ -425,7 +445,7 @@ free generalisation estimate with no extra cross-validation cost; (2) Gini
 importance provides an independent feature ranking to cross-validate the
 Lasso ordering.
 
-300-tree Random Forest with OOB evaluation and 5-fold CV selects *max\_depth = 10, min\_samples\_leaf = 5*. OOB accuracy = 0.801; *test AUROC = 0.836*.
+300-tree Random Forest with OOB evaluation and 5-fold CV selects *max\_depth = 10, min\_samples\_leaf = 10*. OOB score = 0.804; *test AUROC = 0.839*.
 
 #figure(
   image("figures/fig_06_rf_importance.png", width: 96%),
@@ -445,7 +465,7 @@ Lasso ordering.
     table.header([*Model*], [*Test AUROC*]),
     [Logistic Regression],          [0.833],
     [Lasso LR (tuned C = 0.2069)],  [0.835],
-    [Random Forest (tuned)],         [*0.836*],
+    [Random Forest (tuned)],         [*0.839*],
   ),
   caption: [RQ1 model comparison on the held-out test set.],
   kind: table,
@@ -474,10 +494,13 @@ both identify it as important.
 )
 
 Observe that `Contract_Two year`, `tenure`, `InternetService_Fiber optic`,
-`Contract_One year`, and `OnlineSecurity_Yes` appear in the top positions of
-all three rankings. This cross-model consensus provides strong evidence that
-these features carry genuine predictive signal rather than artifacts of any
-single modelling approach.
+`Contract_One year`, `InternetService_No`, and `OnlineSecurity_Yes` appear
+in the top positions of all three rankings. This cross-model consensus
+provides strong evidence that these features carry genuine predictive signal
+rather than artifacts of any single modelling approach. Note that
+`InternetService_No` now appears prominently because the collinearity fix
+concentrates its coefficient in one place rather than splitting it across
+seven identical dummies.
 
 *RQ1 answer:* Contract type (month-to-month is the dominant risk; two-year
 the strongest deterrent), fiber optic internet, short tenure, electronic
@@ -497,8 +520,8 @@ representation; K-Means and Ward hierarchical clustering are compared using
 silhouette scores; the chosen solution is profiled by churn rate, monthly
 charges, tenure, and estimated CLV at risk.
 
-*Why PCA before clustering?* After one-hot encoding the feature matrix has
-~30 columns. Clustering in this high-dimensional space has two problems: (1)
+*Why PCA before clustering?* After one-hot encoding with the
+collinearity-corrected feature set the feature matrix has 26 columns. Clustering in this high-dimensional space has two problems: (1)
 correlated features are double-counted in Euclidean distance --- for instance,
 all six internet add-on columns correlate with `InternetService` and with
 each other; and (2) the "curse of dimensionality" makes all pairwise
@@ -882,7 +905,7 @@ segment is this exact intersection.
     [Decision Tree (tuned)],    [0.829],
     [Logistic Regression],      [0.833],
     [Lasso LR (tuned)],         [0.835],
-    [Random Forest (tuned)],    [0.836],
+    [Random Forest (tuned)],    [0.839],
     [*Gradient Boosting*],      [*0.840*],
   ),
   caption: [Full five-model AUROC comparison on the held-out test set.],
@@ -1081,7 +1104,7 @@ captured in this cross-sectional snapshot.
   (near-unpenalised), AUROC = 0.943.],
 )
 
-With best *C = 1.083*, Lasso retains *25 of 27 encoded features* and zeroes
+With best *C = 1.083*, Lasso retains *18 of 20 encoded features* and zeroes
 out only 2:
 
 #figure(
@@ -1094,7 +1117,7 @@ out only 2:
     [`MonthlyCharges`],  [Once service portfolio is controlled for, raw charge level adds no independent information about contract preference],
     [`Partner_Yes`],     [Having a partner does not independently predict contract type when other factors are held constant],
   ),
-  caption: [Features zeroed out by Lasso (only 2 of 27 — contract type is well-supported by nearly all features).],
+  caption: [Features zeroed out by Lasso (only 2 of 20 — contract type is well-supported by nearly all features).],
   kind: table,
 )
 
@@ -1107,7 +1130,8 @@ Top Lasso coefficients (standardised):
                     else if calc.odd(y) { luma(247) }
                     else { white },
     table.header([*Feature*], [*Lasso coef.*], [*Direction*]),
-    [`tenure`],                           [−2.079], [Strongest predictor of long-term contract],
+    [`InternetService_No`],               [−2.440], [Strongest predictor of long-term contract; no-internet customers almost never choose MTM],
+    [`tenure`],                           [−2.079], [Longer tenure strongly predicts long-term contract],
     [`InternetService_Fiber optic`],      [+1.247], [Fiber → MTM preferred],
     [`TechSupport_Yes`],                  [−0.935], [Add-ons → long-term contract],
     [`DeviceProtection_Yes`],             [−0.715], [Add-ons → long-term contract],
